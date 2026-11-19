@@ -2,5 +2,4 @@
 // them: its plugin functions and nothing else (1.x refuses a package whose
 // exports include anything but plugins). OpenCode 2.x loads opencode2.mjs,
 // which runs these.
-export { MistralVibeAuthPlugin } from "./index.mjs"
 export { VibeAcpBridgePlugin } from "./vibe-acp-bridge.mjs"

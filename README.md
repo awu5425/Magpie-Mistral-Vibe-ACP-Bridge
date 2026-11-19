@@ -1,4 +1,4 @@
-# Mistral Vibe ACP Bridge for Magpie
+# Magpie Mistral Vibe ACP Bridge
 
 <img src="assets/icon.svg" width="72" height="72" alt="Mistral Vibe ACP Bridge">
 
@@ -7,7 +7,8 @@
 调用方执行，工具结果通过 MCP 回到同一个 Vibe 回合。
 
 这是基于 [上游插件](https://github.com/songlairui/magpie-mistral-code) 的社区 fork。
-ACP 桥接使用公开的 ACP 和 MCP 接口，并保留上游的 Mistral API 直连入口。
+插件提供 **Mistral Vibe ACP**，复用本机 Vibe 登录。聊天请求经 ACP 交给 Vibe，插件用
+同一份凭据向 Mistral 查询模型目录和 Vibe Code 月度额度。
 
 ## 前置配置
 
@@ -32,7 +33,7 @@ ACP 桥接使用公开的 ACP 和 MCP 接口，并保留上游的 Mistral API �
 ## 安装与选模型
 
 ```sh
-magpie plugin add github:gwx90/Mistral-Vibe-ACP-Bridge-for-Magpie
+magpie plugin add github:gwx90/Magpie-Mistral-Vibe-ACP-Bridge
 magpie plugin login mistral-vibe-acp api
 ```
 
@@ -78,33 +79,6 @@ magpie usage --csv --last 24h > magpie-usage.csv
 ACP 入口支持文本、流式输出和模型目录标明支持的函数工具。每个新聊天回合会创建隔离的 Vibe
 会话，并传入调用方提供的文本历史。等待工具结果的状态保存在内存中。插件重启、请求取消或回合
 超时后，需要重新发起该回合。图片输入、结构化输出和强制工具选择尚未接入。
-
-## Mistral API 直连与 402 排查
-
-原有直连供应商的 ID 为 `mistral-vibe`。需要直连时，运行 `magpie plugin login mistral-vibe`，
-选浏览器登录，或粘贴在 Mistral 控制台 **Code → Vibe CLI** 创建的 Key。直连通过
-`api.mistral.ai/v1` 获取模型并发送请求，也可读取 Vibe Code 预算、重置时间和套餐名。
-
-直连收到 `billing_api_budget_exhausted` 时，插件会保留 HTTP 402 和上游错误码，并在错误提示中
-显示 Mistral 返回的请求编号（如有）。可把请求编号、时间和模型 ID 提供给 Mistral 支持查询。
-
-### 直连参考价格
-
-以下是 [Mistral 标准 API 的公开参考价格](https://docs.mistral.ai/inference/pricing)，单位为每
-百万 token 的美元价格。插件根据目录的 `billing_model_name` 和别名识别价格。实际计费以
-Mistral 为准。
-
-| 模型 | Input | Cached input | Output |
-| --- | ---: | ---: | ---: |
-| Mistral Large 4 | 0.70 | 0.07 | 2.10 |
-| Mistral Small 4 | 0.15 | 0.015 | 0.60 |
-| Ministral 3 14B | 0.20 | 0.02 | 0.20 |
-| Ministral 3 8B | 0.15 | 0.015 | 0.15 |
-| Ministral 3 3B | 0.10 | 0.01 | 0.10 |
-| Codestral | 0.30 | 0.03 | 0.90 |
-| Z.ai GLM 5.3 Flash | 0.15 | 0.03 | 0.50 |
-| Z.ai GLM 5.3 | 1.40 | 0.14 | 4.40 |
-| DeepSeek V4.1 Flash 1017 | 0.30 | 0.007 | 1.20 |
 
 ## 开发测试
 

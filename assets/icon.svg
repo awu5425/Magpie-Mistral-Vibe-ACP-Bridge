@@ -1,6 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Mistral Vibe ACP Bridge">
-  <rect width="256" height="256" rx="56" fill="#131923"/>
-  <g fill="none" stroke="#FFB64D" stroke-linecap="round" stroke-linejoin="round">
+  <g fill="none" stroke="#C16E1C" stroke-linecap="round" stroke-linejoin="round">
     <path d="M38 168C54 146 64 108 72 70C87 103 107 123 128 123C149 123 169 103 184 70C192 108 202 146 218 168" stroke-width="16"/>
     <path d="M72 68v124M184 68v124M38 168h180" stroke-width="24"/>
   </g>

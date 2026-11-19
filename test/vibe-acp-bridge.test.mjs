@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test"
-import { createVibeAcpCatalog, createVibeAcpFetch, VibeAcpBridgePlugin } from "../vibe-acp-bridge.mjs"
+import * as plugins from "../opencode.mjs"
+import { createVibeAcpCatalog, createVibeAcpFetch } from "../vibe-acp-bridge.mjs"
+
+const { VibeAcpBridgePlugin } = plugins
 
 const model = "mistral-large-4-0"
 const otherModels = [
@@ -21,6 +24,7 @@ function events(text) {
 }
 
 test("ACP provider registers the verified models with tools and local Vibe sign-in", async () => {
+  expect(Object.keys(plugins)).toEqual(["VibeAcpBridgePlugin"])
   const hooks = await VibeAcpBridgePlugin()
   const config = {}
   hooks.config(config)
