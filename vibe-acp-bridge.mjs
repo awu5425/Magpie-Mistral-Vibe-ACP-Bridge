@@ -1,6 +1,6 @@
 import { randomInt, randomUUID } from "node:crypto"
 import { mistralModelsFromRows, vibeUsageOf } from "./index.mjs"
-import { listVibeModelRows, openVibeAcpSession, readVibeBilling } from "./vibe-acp-session.mjs"
+import { hasVibeSignIn, listVibeModelRows, openVibeAcpSession, readVibeBilling } from "./vibe-acp-session.mjs"
 
 const PROVIDER = "mistral-vibe-acp"
 const BASE_URL = "http://127.0.0.1:9/v1"
@@ -401,10 +401,19 @@ export const VibeAcpBridgePlugin = async () => {
     },
     auth: {
       provider: PROVIDER,
+      single: true,
       methods: [{
         type: "api",
-        label: "Use the local Vibe sign-in",
-        placeholder: LOCAL_ACCOUNT,
+        label: "Connect to local Vibe",
+        keyless: true,
+        async authorize(_inputs, { signal } = {}) {
+          try {
+            if (await hasVibeSignIn(signal)) return { type: "success", key: LOCAL_ACCOUNT }
+            return { type: "failed", error: "Sign in with Vibe (vibe --setup) before connecting Magpie." }
+          } catch {
+            return { type: "failed", error: "Could not check the local Vibe sign-in. Make sure Magpie can run vibe-acp." }
+          }
+        },
       }],
       async usage(getAuth) {
         if ((await getAuth())?.key !== LOCAL_ACCOUNT) return { error: "Not connected to local Vibe.", windows: [] }
@@ -422,7 +431,7 @@ export const VibeAcpBridgePlugin = async () => {
         const auth = await getAuth()
         if (auth?.key !== LOCAL_ACCOUNT) return {
           baseURL: BASE_URL,
-          fetch: async () => errorResponse("Connect with local-vibe to use the native Vibe sign-in.", 401),
+          fetch: async () => errorResponse("Connect to local Vibe in Magpie first.", 401),
         }
         return { baseURL: BASE_URL, fetch: bridgeFetch }
       },

@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import * as plugins from "../opencode.mjs"
 import { createVibeAcpCatalog, createVibeAcpFetch } from "../vibe-acp-bridge.mjs"
 
@@ -30,6 +33,7 @@ test("ACP provider registers the verified models with tools and local Vibe sign-
   hooks.config(config)
   const id = hooks.auth.provider
   expect(id).toBe("mistral-vibe-acp")
+  expect(hooks.auth.single).toBe(true)
   const models = await hooks.provider.models()
   expect(Object.keys(models)).toEqual([model, ...otherModels])
   for (const entry of Object.values(models)) expect(entry.tool_call).toBe(true)
@@ -38,6 +42,33 @@ test("ACP provider registers the verified models with tools and local Vibe sign-
   expect(fetch).toBeFunction()
   const another = await VibeAcpBridgePlugin()
   expect((await another.auth.loader(getAuth)).fetch).toBe(fetch)
+})
+
+test("ACP sign-in connects without key entry when local Vibe credentials exist", async () => {
+  const bin = await mkdtemp(join(tmpdir(), "vibe-test-"))
+  const originalPath = process.env.PATH
+  const originalToken = process.env.MISTRAL_API_KEY
+  try {
+    await writeFile(join(bin, "vibe-acp"), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
+    await writeFile(join(bin, "python"), "#!/bin/sh\nprintf 'no\\n'\n", { mode: 0o700 })
+    process.env.PATH = bin
+    delete process.env.MISTRAL_API_KEY
+
+    const { auth } = await VibeAcpBridgePlugin()
+    const [method] = auth.methods
+    expect(method.keyless).toBe(true)
+    expect(method.placeholder).toBeUndefined()
+    expect(await method.authorize()).toMatchObject({ type: "failed", error: expect.stringContaining("vibe --setup") })
+
+    process.env.MISTRAL_API_KEY = "fixture-vibe-credential"
+    expect(await method.authorize()).toEqual({ type: "success", key: "local-vibe" })
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH
+    else process.env.PATH = originalPath
+    if (originalToken === undefined) delete process.env.MISTRAL_API_KEY
+    else process.env.MISTRAL_API_KEY = originalToken
+    await rm(bin, { recursive: true, force: true })
+  }
 })
 
 test("ACP provider displays the native Vibe account budget", async () => {

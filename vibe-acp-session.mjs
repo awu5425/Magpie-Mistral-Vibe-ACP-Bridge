@@ -58,6 +58,20 @@ export async function readVibeBilling() {
   return { subscription, budget }
 }
 
+export async function hasVibeSignIn(signal) {
+  if (process.env.MISTRAL_API_KEY?.trim()) {
+    await vibeExecutable()
+    return true
+  }
+
+  const { stdout } = await run(await vibePython(), ["-I", "-c", `
+from vibe.utils.keyring import get_api_key_from_keyring
+
+print("yes" if get_api_key_from_keyring("MISTRAL_API_KEY") else "no")
+`], { signal, timeout: 8_000 })
+  return stdout.trim() === "yes"
+}
+
 async function readVibeApi(...paths) {
   const urls = paths.map((path) => API_ROOT + path)
   const token = process.env.MISTRAL_API_KEY

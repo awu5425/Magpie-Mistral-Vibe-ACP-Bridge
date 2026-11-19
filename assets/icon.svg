@@ -1,6 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Mistral Vibe ACP Bridge">
-  <g fill="none" stroke="#C16E1C" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M38 168C54 146 64 108 72 70C87 103 107 123 128 123C149 123 169 103 184 70C192 108 202 146 218 168" stroke-width="16"/>
-    <path d="M72 68v124M184 68v124M38 168h180" stroke-width="24"/>
+  <defs>
+    <linearGradient id="bridge-gradient" gradientUnits="userSpaceOnUse" x1="28" y1="0" x2="228" y2="0">
+      <stop offset="0" stop-color="#6547E8"/>
+      <stop offset="1" stop-color="#1889D8"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#bridge-gradient)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M28 90h200M43 178c12-42 43-71 85-71s73 29 85 71" stroke-width="20"/>
+    <path d="M59 90v53m138-53v53" stroke-width="14"/>
   </g>
 </svg>

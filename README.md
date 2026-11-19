@@ -37,8 +37,10 @@ magpie plugin add github:gwx90/Magpie-Mistral-Vibe-ACP-Bridge
 magpie plugin login mistral-vibe-acp api
 ```
 
-登录时输入 `local-vibe`。它是启用本机 Vibe 登录的固定标记。也可以在 Magpie 中打开
-**供应商 → Mistral Vibe ACP → 登录**，输入相同的标记。
+也可以在 Magpie 中打开 **供应商 → Mistral Vibe ACP → 登录**，选择 **Connect to local Vibe**。
+这一步会复用本机当前的 Vibe 登录，无需输入密钥或 `local-vibe`。已连接的账号可继续使用。
+Magpie 只管理一个 Vibe 账号。要换账号，先在官方 Vibe CLI 中登录所需账号。如需重新连接，
+在 Magpie 的供应商设置中选择 **重新登录**。
 
 完成后，在 **供应商 → Mistral Vibe ACP** 的模型列表中选择所需型号。插件从当前账号的
 [Mistral 模型目录](https://docs.mistral.ai/api/endpoint/models)同步未归档的聊天模型，包含可单独
