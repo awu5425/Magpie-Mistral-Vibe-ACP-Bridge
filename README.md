@@ -6,9 +6,14 @@
 **Mistral Vibe ACP** 下的模型后，Magpie 会把请求交给 Vibe，再把流式回复传回客户端。客户端工具由
 调用方执行，工具结果通过 MCP 回到同一个 Vibe 回合。
 
-这是基于 [上游插件](https://github.com/songlairui/magpie-mistral-code) 的社区 fork。
 插件提供 **Mistral Vibe ACP**，复用本机 Vibe 登录。聊天请求经 ACP 交给 Vibe，插件用
 同一份凭据向 Mistral 查询模型目录和 Vibe Code 月度额度。
+
+## 致谢
+
+本项目源自 [songlairui/magpie-mistral-code](https://github.com/songlairui/magpie-mistral-code)。
+感谢 [songlairui](https://github.com/songlairui) 和上游贡献者提供的 Magpie 与 OpenCode 接入代码，
+本桥接仍沿用了其中的模型目录和额度解析逻辑。Vibe ACP Bridge 由本仓库独立维护。
 
 ## 前置配置
 
