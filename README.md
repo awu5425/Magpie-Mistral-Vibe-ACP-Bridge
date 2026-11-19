@@ -1,6 +1,6 @@
 # Mistral Vibe ACP Bridge for Magpie
 
-<img src="assets/icon.svg" width="72" height="72" alt="Mistral Vibe Code">
+<img src="assets/icon.svg" width="72" height="72" alt="Mistral Vibe ACP Bridge">
 
 让 Magpie 中的 OpenCode 等客户端通过本机官方 `vibe-acp` 调用 Mistral 托管的聊天模型。选中
 **Mistral Vibe ACP** 下的模型后，Magpie 会把请求交给 Vibe，再把流式回复传回客户端。客户端工具由
