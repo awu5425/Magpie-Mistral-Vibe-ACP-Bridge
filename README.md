@@ -15,6 +15,8 @@
 感谢 [songlairui](https://github.com/songlairui) 和上游贡献者提供的 Magpie 与 OpenCode 接入代码，
 本桥接仍沿用了其中的模型目录和额度解析逻辑。Vibe ACP Bridge 由本仓库独立维护。
 
+感谢 OpenAI Codex 协助实现 ACP 桥接、验证模型与工具调用，并更新项目文档。
+
 ## 前置配置
 
 1. **Magpie** 和 **官方 Mistral Vibe CLI** 安装在同一台机器、同一系统用户下。ACP 桥接使用
