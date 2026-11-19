@@ -32,7 +32,7 @@ ACP 桥接使用公开的 ACP 和 MCP 接口，并保留上游的 Mistral API �
 ## 安装与选模型
 
 ```sh
-magpie plugin add github:gwx90/magpie-mistral-code
+magpie plugin add github:gwx90/Mistral-Vibe-ACP-Bridge-for-Magpie
 magpie plugin login mistral-vibe-acp api
 ```
 
