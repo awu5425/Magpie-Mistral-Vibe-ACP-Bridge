@@ -61,7 +61,11 @@ test("ACP sign-in connects without key entry when local Vibe credentials exist",
     expect(await method.authorize()).toMatchObject({ type: "failed", error: expect.stringContaining("vibe --setup") })
 
     process.env.MISTRAL_API_KEY = "fixture-vibe-credential"
-    expect(await method.authorize()).toEqual({ type: "success", key: "local-vibe" })
+    expect(await method.authorize()).toEqual({
+      type: "success",
+      key: "local-vibe",
+      metadata: { email: "Vibe CLI" },
+    })
   } finally {
     if (originalPath === undefined) delete process.env.PATH
     else process.env.PATH = originalPath

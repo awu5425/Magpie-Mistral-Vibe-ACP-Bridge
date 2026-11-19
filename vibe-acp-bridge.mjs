@@ -5,6 +5,7 @@ import { hasVibeSignIn, listVibeModelRows, openVibeAcpSession, readVibeBilling }
 const PROVIDER = "mistral-vibe-acp"
 const BASE_URL = "http://127.0.0.1:9/v1"
 const LOCAL_ACCOUNT = "local-vibe"
+const LOCAL_ACCOUNT_NAME = "Vibe CLI"
 const TURN_TIMEOUT = 180_000
 const MAX_TURNS = 4
 const TOOL_ID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -408,7 +409,10 @@ export const VibeAcpBridgePlugin = async () => {
         keyless: true,
         async authorize(_inputs, { signal } = {}) {
           try {
-            if (await hasVibeSignIn(signal)) return { type: "success", key: LOCAL_ACCOUNT }
+            if (await hasVibeSignIn(signal)) {
+              // Magpie reads metadata.email as the account label for keyless API methods.
+              return { type: "success", key: LOCAL_ACCOUNT, metadata: { email: LOCAL_ACCOUNT_NAME } }
+            }
             return { type: "failed", error: "Sign in with Vibe (vibe --setup) before connecting Magpie." }
           } catch {
             return { type: "failed", error: "Could not check the local Vibe sign-in. Make sure Magpie can run vibe-acp." }
