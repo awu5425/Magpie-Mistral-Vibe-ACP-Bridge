@@ -5,10 +5,8 @@
 //   /api/vibe/sign-in with a PKCE challenge, the page it answers with is
 //   opened, its poll_url is read until the browser has signed in, and
 //   POST /api/vibe/sign-in/{process_id}/exchange (exchange_token +
-//   code_verifier) returns an API key. That key is made for Vibe Code: its
-//   calls on api.mistral.ai bill the plan's monthly Vibe Code budget, not
-//   pay-as-you-go API credits. A key made the same way in the console
-//   (Code > Vibe Code CLI) can be pasted instead.
+//   code_verifier) returns an API key made for Vibe Code. A key created in
+//   the console (Code > Vibe Code CLI) can be pasted instead.
 // - Requests are plain OpenAI chat completions on https://api.mistral.ai/v1
 //   with the key as a bearer token; the models are /v1/models. No private
 //   protocol (the CLI's ACP layer is its IDE control plane, not its model
@@ -173,9 +171,13 @@ async function listModels(key) {
   })
   if (!res.ok) return null
   const j = await res.json().catch(() => null)
+  return mistralModelsFromRows(j?.data ?? [])
+}
+
+export async function mistralModelsFromRows(rows) {
   const dev = await modelsDev()
   const out = {}
-  for (const m of j?.data ?? []) {
+  for (const m of rows) {
     if (!m?.id || typeof m.id !== "string") continue
     const billing = typeof m.billing_model_name === "string" ? m.billing_model_name : ""
     const aliases = Array.isArray(m.aliases) ? m.aliases : []
@@ -323,6 +325,24 @@ function mistralBody(body) {
   return changed ? JSON.stringify(q) : body
 }
 
+// Keep the upstream status and error fields for the host, and include the
+// support ID in the message since clients may only display that field.
+async function explainApiBudgetError(response) {
+  if (response.status !== 402) return response
+  const error = await response.clone().json().catch(() => null)
+  if (error?.type !== "billing_api_budget_exhausted") return response
+
+  const requestId = response.headers.get("mistral-correlation-id") ?? response.headers.get("x-kong-request-id")
+  const reference = /^[a-z0-9._-]{1,128}$/i.test(requestId ?? "") ? ` Mistral request ID: ${requestId}.` : ""
+  const message = typeof error.message === "string" && error.message ? error.message : "API budget exhausted."
+  error.message = `${message} (billing_api_budget_exhausted) Vibe Code usage is reported separately.${reference}`
+
+  const headers = new Headers(response.headers)
+  for (const name of ["content-encoding", "content-length", "transfer-encoding", "etag", "content-md5", "digest", "content-digest", "repr-digest"]) headers.delete(name)
+  headers.set("content-type", "application/json")
+  return new Response(JSON.stringify(error), { status: response.status, statusText: response.statusText, headers })
+}
+
 // ---- the plugin ----
 
 export const MistralVibeAuthPlugin = async ({ client } = {}) => ({
@@ -358,12 +378,14 @@ export const MistralVibeAuthPlugin = async ({ client } = {}) => ({
           const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
           headers.set("Authorization", `Bearer ${key}`)
           const body = mistralBody(init.body)
+          const options = { ...init, headers }
           if (body !== init.body) {
             // the length the engine counted is not the one sent
             headers.delete("content-length")
-            return fetch(input, { ...init, headers, body })
+            options.body = body
           }
-          return fetch(input, { ...init, headers })
+          const response = await fetch(input, options)
+          return explainApiBudgetError(response)
         },
       }
     },

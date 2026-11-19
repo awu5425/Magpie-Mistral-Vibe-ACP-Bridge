@@ -191,6 +191,51 @@ test("loader signs each request with the account key", async () => {
   expect(j.choices[0].message.content).toBe("hi")
 })
 
+test("loader reports the upstream API-budget error and support ID", async () => {
+  const upstream = {
+    object: "error", message: "API budget exhausted.", type: "billing_api_budget_exhausted",
+    param: null, code: "2303", raw_status_code: 402,
+  }
+  let requests = 0
+  const body = JSON.stringify({ model: "mistral-large-4", messages: [{ role: "user", content: "hi" }] })
+  globalThis.fetch = async (_input, init) => {
+    requests++
+    expect(init.body).toBe(body)
+    return new Response(JSON.stringify(upstream), {
+      status: 402,
+      headers: { "mistral-correlation-id": "request-402", "content-length": "139" },
+    })
+  }
+
+  const hooks = await plugin()
+  const loader = await hooks.auth.loader(async () => ({ type: "api", key: KEY }))
+  const response = await loader.fetch("http://mock.local/v1/chat/completions", { method: "POST", body })
+  expect(requests).toBe(1)
+  expect(response.status).toBe(402)
+  expect(response.headers.get("mistral-correlation-id")).toBe("request-402")
+  expect(response.headers.has("content-length")).toBe(false)
+  const { message, ...fields } = await response.json()
+  expect({ message: upstream.message, ...fields }).toEqual(upstream)
+  expect(message).toContain(upstream.message)
+  expect(message).toContain(upstream.type)
+  expect(message).toContain("Vibe Code usage is reported separately")
+  expect(message).toContain("Mistral request ID: request-402")
+})
+
+test.each([
+  [402, '<html>Payment required</html>'],
+  [402, '{"type":"billing_vibe_budget_exhausted","message":"Vibe quota exhausted."}'],
+  [422, '{"detail":"Invalid request"}'],
+])("loader passes through unrelated errors (%i, %s)", async (status, body) => {
+  const upstream = new Response(body, { status })
+  globalThis.fetch = async () => upstream
+  const hooks = await plugin()
+  const loader = await hooks.auth.loader(async () => ({ type: "api", key: KEY }))
+  const response = await loader.fetch("http://mock.local/v1/chat/completions")
+  expect(response).toBe(upstream)
+  expect(await response.text()).toBe(body)
+})
+
 test("loader with no sign-in returns no options", async () => {
   const hooks = await plugin()
   expect(await hooks.auth.loader(async () => null)).toEqual({})

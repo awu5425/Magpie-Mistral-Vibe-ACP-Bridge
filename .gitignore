@@ -1,3 +1,6 @@
 node_modules/
 bun.lock
 .dashboard/
+.env
+.env.*
+!.env.example

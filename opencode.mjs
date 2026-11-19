@@ -3,3 +3,4 @@
 // exports include anything but plugins). OpenCode 2.x loads opencode2.mjs,
 // which runs these.
 export { MistralVibeAuthPlugin } from "./index.mjs"
+export { VibeAcpBridgePlugin } from "./vibe-acp-bridge.mjs"
