@@ -36,6 +36,45 @@ test("ACP provider registers the verified models with tools and local Vibe sign-
   expect((await another.auth.loader(getAuth)).fetch).toBe(fetch)
 })
 
+test("ACP provider displays the native Vibe account budget", async () => {
+  const originalFetch = globalThis.fetch
+  const originalToken = process.env.MISTRAL_API_KEY
+  process.env.MISTRAL_API_KEY = "fixture-vibe-credential"
+  try {
+    const calls = []
+    globalThis.fetch = async (url, init) => {
+      const path = new URL(url).pathname
+      calls.push(path)
+      expect(new Headers(init.headers).get("authorization")).toBe("Bearer fixture-vibe-credential")
+      if (path.endsWith("/subscription")) return Response.json({ plan_name: "Test Plan" })
+      if (path.endsWith("/budget")) return Response.json({
+        vibe_budget: { usage_percentage: 42.5, reset_at: "2099-01-01T00:00:00Z" },
+      })
+      throw new Error("Unexpected request")
+    }
+    const { auth } = await VibeAcpBridgePlugin()
+    expect((await auth.usage(async () => null)).windows).toEqual([])
+    const report = await auth.usage(async () => ({ key: "local-vibe" }))
+    expect(calls.sort()).toEqual(["/v1/billing/budget", "/v1/billing/subscription"])
+    expect(report.plan).toBe("Test Plan")
+    expect(report.windows).toHaveLength(1)
+    expect(report.windows[0]).toMatchObject({
+      name: "Monthly Vibe Code",
+      used: 42.5,
+      resetsAt: Date.parse("2099-01-01T00:00:00Z"),
+      aside: true,
+    })
+    globalThis.fetch = async () => new Response(null, { status: 401 })
+    const unavailable = await auth.usage(async () => ({ key: "local-vibe" }))
+    expect(unavailable.error).toBeString()
+    expect(unavailable.windows).toEqual([])
+  } finally {
+    globalThis.fetch = originalFetch
+    if (originalToken === undefined) delete process.env.MISTRAL_API_KEY
+    else process.env.MISTRAL_API_KEY = originalToken
+  }
+})
+
 test.each(otherModels)("ACP uses the selected model %s", async (selected) => {
   const bridge = createVibeAcpFetch(async ({ model, onText }) => {
     expect(model.id).toBe(selected)
@@ -93,6 +132,20 @@ test("ACP catalog keeps verified presets when discovery is unavailable", async (
   expect(Object.keys(await catalog.list())).toEqual([model, ...otherModels])
 })
 
+test("non-streaming replies include reported tokens and omit missing usage", async () => {
+  const makeBridge = (usage) => createVibeAcpFetch(async ({ onText }) => ({
+    async prompt() {
+      onText("Done.")
+      return { stopReason: "end_turn", usage }
+    },
+    close() {},
+  }))
+  const counted = await send(makeBridge({ inputTokens: 200, outputTokens: 10 }), { stream: false })
+  expect((await counted.json()).usage).toEqual({ prompt_tokens: 200, completion_tokens: 10, total_tokens: 210 })
+  const missing = await send(makeBridge(), { stream: false })
+  expect((await missing.json()).usage).toBeUndefined()
+})
+
 test("tool finish pauses the HTTP response while the original ACP turn stays active", async () => {
   let opened = 0
   let prompts = 0
@@ -108,7 +161,10 @@ test("tool finish pauses the HTTP response while the original ACP turn stays act
         const result = await onTool("marker", { input: "fixture" })
         onText("Found ")
         onText(result)
-        return { stopReason: "end_turn" }
+        return {
+          stopReason: "end_turn",
+          usage: { inputTokens: 321, outputTokens: 12, totalTokens: 333, cachedReadTokens: 100 },
+        }
       },
       close() { closed++ },
     }
@@ -118,7 +174,9 @@ test("tool finish pauses the HTTP response while the original ACP turn stays act
   const firstSignal = new AbortController()
   const first = await send(bridge, { tools }, firstSignal.signal)
   expect(first.headers.get("content-type")).toContain("text/event-stream")
-  const chunks = events(await first.text()).map((chunk) => chunk.choices[0])
+  const firstEvents = events(await first.text())
+  expect(firstEvents.every((event) => !event.usage)).toBe(true)
+  const chunks = firstEvents.map((chunk) => chunk.choices[0])
   expect(chunks.map((c) => c.delta.content ?? "").join("")).toBe("Looking.")
   expect(chunks.at(-1).finish_reason).toBe("tool_calls")
   firstSignal.abort()
@@ -141,7 +199,18 @@ test("tool finish pauses the HTTP response while the original ACP turn stays act
   expect((await send(bridge, { model: otherModels[0], messages: continued, tools })).status).toBe(409)
 
   const second = await send(bridge, { messages: continued, tools })
-  const reply = events(await second.text()).map((chunk) => chunk.choices[0])
+  const secondEvents = events(await second.text())
+  expect(secondEvents.filter((event) => event.usage)).toHaveLength(1)
+  expect(secondEvents.at(-1)).toMatchObject({
+    choices: [],
+    usage: {
+      prompt_tokens: 321,
+      completion_tokens: 12,
+      total_tokens: 333,
+      prompt_tokens_details: { cached_tokens: 100 },
+    },
+  })
+  const reply = secondEvents.flatMap((chunk) => chunk.choices)
   expect(reply.map((c) => c.delta.content).filter(Boolean)).toEqual(["Found ", "unique-result"])
   expect(reply.at(-1).finish_reason).toBe("stop")
   expect([opened, prompts, closed]).toEqual([1, 1, 1])

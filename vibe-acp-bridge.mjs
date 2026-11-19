@@ -1,6 +1,6 @@
 import { randomInt, randomUUID } from "node:crypto"
-import { mistralModelsFromRows } from "./index.mjs"
-import { listVibeModelRows, openVibeAcpSession } from "./vibe-acp-session.mjs"
+import { mistralModelsFromRows, vibeUsageOf } from "./index.mjs"
+import { listVibeModelRows, openVibeAcpSession, readVibeBilling } from "./vibe-acp-session.mjs"
 
 const PROVIDER = "mistral-vibe-acp"
 const BASE_URL = "http://127.0.0.1:9/v1"
@@ -131,6 +131,23 @@ function promptOf(messages) {
   ].join("\n")
 }
 
+function chatUsage(usage) {
+  const isTokenCount = (value) => Number.isSafeInteger(value) && value >= 0
+  const { inputTokens, outputTokens, totalTokens, cachedReadTokens, thoughtTokens } = usage ?? {}
+  if (!isTokenCount(inputTokens) || !isTokenCount(outputTokens)) return undefined
+  return {
+    prompt_tokens: inputTokens,
+    completion_tokens: outputTokens,
+    total_tokens: isTokenCount(totalTokens) ? totalTokens : inputTokens + outputTokens,
+    ...(isTokenCount(cachedReadTokens) && cachedReadTokens <= inputTokens && {
+      prompt_tokens_details: { cached_tokens: cachedReadTokens },
+    }),
+    ...(isTokenCount(thoughtTokens) && thoughtTokens <= outputTokens && {
+      completion_tokens_details: { reasoning_tokens: thoughtTokens },
+    }),
+  }
+}
+
 function responsePort(model, stream, complete, abort, signal) {
   const envelope = { id: `chatcmpl-${randomUUID()}`, created: Math.floor(Date.now() / 1000), model }
   let resolve
@@ -165,11 +182,12 @@ function responsePort(model, stream, complete, abort, signal) {
       if (stream) delta({ content: text })
       else buffer += text
     },
-    finish(reason, toolCall) {
+    finish(reason, { toolCall, usage } = {}) {
       finish()
       if (stream) {
         if (toolCall) delta({ tool_calls: [{ index: 0, ...toolCall }] })
         delta({}, reason)
+        if (usage) write({ ...envelope, object: "chat.completion.chunk", choices: [], usage })
         write("[DONE]")
         controller.close()
       } else {
@@ -178,7 +196,7 @@ function responsePort(model, stream, complete, abort, signal) {
           content: buffer || (toolCall ? null : ""),
           ...(toolCall ? { tool_calls: [toolCall] } : {}),
         }
-        resolve(Response.json({ ...envelope, object: "chat.completion", choices: [{ index: 0, message, finish_reason: reason }] }))
+        resolve(Response.json({ ...envelope, object: "chat.completion", choices: [{ index: 0, message, finish_reason: reason }], usage }))
       }
     },
     fail(message, status) {
@@ -244,7 +262,7 @@ export function createVibeAcpFetch(openSession = openVibeAcpSession, findModel =
       }
       if (terminal) {
         if (terminal.error) port.fail(terminal.error, terminal.status)
-        else port.finish(terminal.reason)
+        else port.finish(terminal.reason, { usage: terminal.usage })
         return
       }
       if (exposed || !queue.length) return
@@ -252,7 +270,7 @@ export function createVibeAcpFetch(openSession = openVibeAcpSession, findModel =
       pending.set(exposed.call.id, turn)
       // Closing this response lets the caller run the tool. The original
       // session/prompt stays pending until the matching tool result arrives.
-      port.finish("tool_calls", exposed.call)
+      port.finish("tool_calls", { toolCall: exposed.call })
     }
 
     function onTool(name, args) {
@@ -305,7 +323,12 @@ export function createVibeAcpFetch(openSession = openVibeAcpSession, findModel =
             end({ error: `Vibe ACP ended the turn with ${result.stopReason}.`, status: 502 })
             return
           }
-          end({ reason: result.stopReason === "max_tokens" ? "length" : "stop" })
+          // A fresh ACP session serves this turn, including all the tool legs.
+          // Report its cumulative usage only on the last HTTP response.
+          end({
+            reason: result.stopReason === "max_tokens" ? "length" : "stop",
+            usage: chatUsage(result.usage),
+          })
         } catch (error) {
           end({ error: error?.message || "Vibe ACP request failed.", status: 502 })
         }
@@ -383,6 +406,18 @@ export const VibeAcpBridgePlugin = async () => {
         label: "Use the local Vibe sign-in",
         placeholder: LOCAL_ACCOUNT,
       }],
+      async usage(getAuth) {
+        if ((await getAuth())?.key !== LOCAL_ACCOUNT) return { error: "Not connected to local Vibe.", windows: [] }
+        try {
+          const { subscription, budget } = await readVibeBilling()
+          const { plan, windows } = vibeUsageOf(subscription, budget)
+          return windows.length
+            ? { plan, windows: windows.map((window) => ({ ...window, aside: true })) }
+            : { plan, error: "Mistral did not return a Vibe Code budget window.", windows: [] }
+        } catch {
+          return { error: "Could not read Vibe Code usage with the local Vibe login.", windows: [] }
+        }
+      },
       async loader(getAuth) {
         const auth = await getAuth()
         if (auth?.key !== LOCAL_ACCOUNT) return {

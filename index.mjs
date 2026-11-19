@@ -242,10 +242,14 @@ async function readUsage(key) {
     ask(`${apiBase()}/billing/budget`),
     whoami(key),
   ])
+  return vibeUsageOf(subscription, budget, who)
+}
+
+export function vibeUsageOf(subscription, budget, who) {
   const plan = subscription?.plan_name || who?.plan_name || undefined
   const vb = budget?.vibe_budget
   const windows = []
-  if (vb && typeof vb.usage_percentage === "number") {
+  if (Number.isFinite(vb?.usage_percentage)) {
     const resetsAt = vb.reset_at ? Date.parse(vb.reset_at) : NaN
     const span = Number.isFinite(resetsAt) ? Math.max(3600, Math.floor((resetsAt - Date.now()) / 1000)) : 30 * 86400
     windows.push({

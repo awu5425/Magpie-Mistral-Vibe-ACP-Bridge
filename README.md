@@ -54,6 +54,25 @@ opencode reload
 opencode run --model magpie/mistral-vibe-acp/mistral-large-4-0 "Reply with OK."
 ```
 
+### 在 Magpie 查看用量
+
+- **月度额度**。打开 Magpie 的 **用量**，在页面顶部找到 **Mistral Vibe ACP** 的 `Monthly Vibe Code`
+  额度卡。这里显示 Mistral 返回的已用比例和重置时间。也可以在该供应商的账号卡片上查看。
+- **Token 用量**。在 **用量 → 请求** 中找到供应商为 `mistral-vibe-acp` 的记录，查看输入、输出
+  和缓存读取 token（如有）。图表和汇总可按日期范围、模型或账号查看。
+
+也可以在终端查看额度和今日汇总，或导出最近 24 小时的逐条用量：
+
+```sh
+magpie quota mistral-vibe-acp
+magpie usage today
+magpie usage --csv --last 24h > magpie-usage.csv
+```
+
+在 CSV 中按 `provider` 列筛选 `mistral-vibe-acp`，查看 `input_tokens`、`output_tokens`
+和 `cache_read_tokens`。含工具调用的回合在最后一次响应中记录整轮用量，避免重复计数。
+历史请求沿用当时的记录。[Magpie 用量说明](https://usemagpie.ai/docs/usage)
+
 ### 当前支持范围
 
 ACP 入口支持文本、流式输出和模型目录标明支持的函数工具。每个新聊天回合会创建隔离的 Vibe

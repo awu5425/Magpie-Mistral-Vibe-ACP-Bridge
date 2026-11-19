@@ -14,7 +14,7 @@ const STARTUP_MS = 45_000
 const TURN_MS = 15 * 60_000
 const IDLE_MS = 5 * 60_000
 const MAX_FRAME = 16 * 1024 * 1024
-const CATALOG_URL = "https://api.mistral.ai/v1/models"
+const API_ROOT = "https://api.mistral.ai/v1"
 const run = promisify(execFile)
 
 async function vibeExecutable() {
@@ -49,31 +49,59 @@ async function vibePython() {
 }
 
 export async function listVibeModelRows() {
+  const [catalog] = await readVibeApi("/models")
+  return catalog?.data
+}
+
+export async function readVibeBilling() {
+  const [subscription, budget] = await readVibeApi("/billing/subscription", "/billing/budget")
+  return { subscription, budget }
+}
+
+async function readVibeApi(...paths) {
+  const urls = paths.map((path) => API_ROOT + path)
   const token = process.env.MISTRAL_API_KEY
   if (token) {
-    const response = await fetch(CATALOG_URL, {
-      headers: { authorization: `Bearer ${token}` },
-      redirect: "error",
-      signal: AbortSignal.timeout(10_000),
-    })
-    if (!response.ok) throw new Error(`Mistral model catalog returned HTTP ${response.status}.`)
-    return (await response.json()).data
+    return Promise.all(urls.map(async (url) => {
+      try {
+        const response = await fetch(url, {
+          headers: { authorization: `Bearer ${token}` },
+          redirect: "error",
+          signal: AbortSignal.timeout(8_000),
+        })
+        return response.ok ? await response.json() : null
+      } catch {
+        return null
+      }
+    }))
   }
 
-  // The installed Vibe runtime resolves its own Keychain login. Only the
-  // model catalog leaves the helper process, so Magpie never stores that key.
+  // The installed Vibe runtime resolves its own Keychain login. The helper
+  // returns API data while keeping the credential inside its process.
   const { stdout } = await run(await vibePython(), ["-I", "-c", `
+import asyncio
+import json
+import sys
 import httpx
 from vibe.utils.keyring import get_api_key_from_keyring
 
 key = get_api_key_from_keyring("MISTRAL_API_KEY")
 if not key:
     raise SystemExit(1)
-reply = httpx.get(${JSON.stringify(CATALOG_URL)}, headers={"Authorization": "Bearer " + key}, timeout=10)
-reply.raise_for_status()
-print(reply.text)
-`], { timeout: 13_000, maxBuffer: 2 * 1024 * 1024 })
-  return JSON.parse(stdout).data
+
+async def read_urls():
+    async with httpx.AsyncClient(headers={"Authorization": "Bearer " + key}, timeout=8) as client:
+        async def read(url):
+            try:
+                reply = await client.get(url)
+                return reply.json() if reply.is_success else None
+            except (httpx.HTTPError, ValueError):
+                return None
+        return await asyncio.gather(*(read(url) for url in sys.argv[1:]))
+
+print(json.dumps(asyncio.run(read_urls())))
+`, ...urls], { timeout: 12_000, maxBuffer: 2 * 1024 * 1024 })
+  return JSON.parse(stdout)
 }
 
 function isObject(value) {
