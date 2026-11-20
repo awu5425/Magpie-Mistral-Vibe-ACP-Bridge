@@ -6,7 +6,11 @@ const PROVIDER = "mistral-vibe-acp"
 const BASE_URL = "http://127.0.0.1:9/v1"
 const LOCAL_ACCOUNT = "local-vibe"
 const LOCAL_ACCOUNT_NAME = "Vibe CLI"
-const TURN_TIMEOUT = 180_000
+// Idle budget for one ACP turn. Progress (a new HTTP leg, a tool call, a tool
+// result, streamed text) re-arms it; a turn that sees no progress for this long
+// is reaped. Client-side tool execution between legs counts as idle time too,
+// so keep this generous — and reaping must never kill a live turn again.
+const TURN_TIMEOUT = 600_000
 const MAX_TURNS = 4
 const TOOL_ID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 const FALLBACK_MODELS = [
@@ -87,6 +91,12 @@ export function createVibeAcpCatalog(loadRows = listVibeModelRows, describe = mi
   }
 }
 
+const modelId = (value) => {
+  const id = typeof value === "string" ? value : ""
+  const slash = id.lastIndexOf("/")
+  return slash >= 0 ? id.slice(slash + 1) : id
+}
+
 const errorResponse = (message, status) => Response.json({
   error: { message, type: status < 500 ? "invalid_request_error" : "upstream_error" },
 }, { status })
@@ -105,8 +115,9 @@ function requestTools(tools) {
   if (!Array.isArray(tools)) throw new Error("tools must be an array.")
   const names = new Set()
   return tools.map(({ type, function: fn } = {}) => {
-    if (type !== "function" || !/^[A-Za-z0-9_-]{1,64}$/.test(fn?.name ?? "") || names.has(fn.name)) {
-      throw new Error("Vibe ACP Bridge accepts function tools with unique names.")
+    if (type !== "function" || !/^[A-Za-z0-9_-]{1,64}$/.test(fn?.name ?? "") || names.has(fn.name) ||
+        (fn.parameters != null && (typeof fn.parameters !== "object" || Array.isArray(fn.parameters)))) {
+      throw new Error("Vibe ACP Bridge accepts function tools with unique names and object schemas.")
     }
     names.add(fn.name)
     return {
@@ -171,7 +182,7 @@ function responsePort(model, stream, complete, abort, signal) {
     : new Promise((done) => { resolve = done })
 
   signal?.addEventListener("abort", abort, { once: true })
-  function finish() {
+  function detach() {
     live = false
     signal?.removeEventListener("abort", abort)
     complete()
@@ -180,11 +191,13 @@ function responsePort(model, stream, complete, abort, signal) {
   return {
     response,
     text(text) {
+      if (!live) return
       if (stream) delta({ content: text })
       else buffer += text
     },
     finish(reason, { toolCall, usage } = {}) {
-      finish()
+      if (!live) return
+      detach()
       if (stream) {
         if (toolCall) delta({ tool_calls: [{ index: 0, ...toolCall }] })
         delta({}, reason)
@@ -201,14 +214,16 @@ function responsePort(model, stream, complete, abort, signal) {
       }
     },
     fail(message, status) {
-      finish()
+      if (!live) return
+      detach()
       if (stream) {
         write({ error: { message, type: "upstream_error" } })
         controller.close()
       } else resolve(errorResponse(message, status))
     },
     cancel() {
-      finish()
+      if (!live) return
+      detach()
       if (stream) {
         // An HTTP consumer may already have cancelled its ReadableStream.
         try { controller.close() } catch {}
@@ -217,25 +232,36 @@ function responsePort(model, stream, complete, abort, signal) {
   }
 }
 
-export function createVibeAcpFetch(openSession = openVibeAcpSession, findModel = (id) => fallbackById.get(id)) {
+export function createVibeAcpFetch(openSession = openVibeAcpSession, findModel = (id) => fallbackById.get(id), options = {}) {
   const pending = new Map()
   const active = new Set()
 
-  function begin(model, tools, prompt) {
+  function begin(model, tools, prompt, { turnTimeout = TURN_TIMEOUT } = {}) {
     const queue = []
     let port, session, terminal, exposed
     let buffered = ""
     let closed = false
-    const timer = setTimeout(() => end({ error: "Vibe ACP turn timed out.", status: 504 }), TURN_TIMEOUT)
-    timer.unref?.()
+    let timer
+    const rearm = () => {
+      if (closed) return
+      clearTimeout(timer)
+      timer = setTimeout(() => end({ error: "Vibe ACP turn timed out.", status: 504 }), turnTimeout)
+      timer.unref?.()
+    }
+    rearm()
+
+    function outstanding() {
+      return [...(exposed ? [exposed] : []), ...queue]
+    }
 
     function release() {
       clearTimeout(timer)
       active.delete(turn)
-      if (exposed) pending.delete(exposed.call.id)
+      for (const item of outstanding()) pending.delete(item.call.id)
       if (session) void Promise.resolve().then(() => session.close()).catch(() => {})
       const interrupted = { isError: true, content: [{ type: "text", text: "The Vibe ACP turn ended." }] }
       exposed?.resolve(interrupted)
+      exposed = undefined
       for (const item of queue) item.resolve(interrupted)
       queue.length = 0
     }
@@ -250,6 +276,12 @@ export function createVibeAcpFetch(openSession = openVibeAcpSession, findModel =
 
     function abort() {
       if (closed) return
+      // A client often cancels the HTTP stream once it has the tool call.
+      // The ACP turn still has to stay up for the tool result.
+      if (outstanding().length) {
+        port = undefined
+        return
+      }
       closed = true
       release()
       port?.cancel()
@@ -283,6 +315,8 @@ export function createVibeAcpFetch(openSession = openVibeAcpSession, findModel =
       const call = { id, type: "function", function: { name, arguments: JSON.stringify(args ?? {}) } }
       return new Promise((resolve) => {
         queue.push({ call, resolve })
+        pending.set(id, turn)
+        rearm()
         flush()
       })
     }
@@ -291,15 +325,20 @@ export function createVibeAcpFetch(openSession = openVibeAcpSession, findModel =
       model,
       connect(stream, signal) {
         port = responsePort(model.id, stream, () => { port = undefined }, abort, signal)
+        rearm()
         const response = port.response
         flush()
         return response
       },
+      waiting: () => !closed && outstanding().length > 0,
       result(id, text) {
-        if (exposed?.call.id !== id || closed) return
-        const match = exposed
-        pending.delete(id)
-        exposed = undefined
+        rearm()
+        const all = outstanding()
+        const match = all.find((item) => item.call.id === id) ?? (all.length === 1 ? all[0] : undefined)
+        if (!match || closed) return
+        if (exposed === match) exposed = undefined
+        else queue.splice(queue.indexOf(match), 1)
+        pending.delete(match.call.id)
         match.resolve(text)
         flush()
       },
@@ -311,6 +350,7 @@ export function createVibeAcpFetch(openSession = openVibeAcpSession, findModel =
             onTool,
             onText(text) {
               if (closed) return
+              rearm()
               if (port) port.text(text)
               else buffered += text
             },
@@ -359,14 +399,21 @@ export function createVibeAcpFetch(openSession = openVibeAcpSession, findModel =
     try {
       if (last.role === "tool") {
         const id = last.tool_call_id
-        const turn = pending.get(id)
-        if (!turn || turn.model.id !== body.model) return errorResponse("No live Vibe ACP turn for this model is waiting for this tool result.", 409)
-        const text = textOf(last.content)
-        const response = turn.connect(stream, signal)
-        turn.result(id, text)
-        return response
+        const requested = modelId(body.model)
+        const waiting = [...active].filter((item) => modelId(item.model.id) === requested && item.waiting())
+        const turn = pending.get(id) ?? (waiting.length === 1 ? waiting[0] : undefined)
+        if (turn && modelId(turn.model.id) === requested) {
+          const text = textOf(last.content)
+          const response = turn.connect(stream, signal)
+          turn.result(id, text)
+          return response
+        }
+        // No live turn is waiting for this result: the turn already ended, was
+        // reaped after going idle, or the bridge state was lost to a plugin
+        // reload. Fall through and seed a fresh ACP turn from the full
+        // transcript instead of failing the caller's turn with a 409.
       }
-      const model = await findModel(body.model)
+      const model = await findModel(modelId(body.model))
       if (!model) return errorResponse("This model is unavailable on Vibe ACP Bridge.", 400)
       if (signal?.aborted) return errorResponse("Vibe ACP request was cancelled.", 499)
       if (active.size >= MAX_TURNS) return errorResponse("Vibe ACP Bridge is busy.", 503)
@@ -374,7 +421,7 @@ export function createVibeAcpFetch(openSession = openVibeAcpSession, findModel =
         return errorResponse("Vibe ACP Bridge supports auto and none tool choice.", 400)
       }
       const tools = body.tool_choice === "none" || model.toolCall === false ? [] : requestTools(body.tools)
-      const turn = begin(model, tools, promptOf(messages))
+      const turn = begin(model, tools, promptOf(messages), options)
       const response = turn.connect(stream, signal)
       void turn.run()
       return response

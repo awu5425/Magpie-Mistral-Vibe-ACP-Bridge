@@ -1,12 +1,16 @@
 import { execFile, spawn } from "node:child_process"
+import { randomBytes } from "node:crypto"
 import { once } from "node:events"
 import { constants } from "node:fs"
 import { access, mkdir, mkdtemp, open, realpath, rm, writeFile } from "node:fs/promises"
 import { createConnection, createServer } from "node:net"
+import { tmpdir } from "node:os"
 import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { promisify } from "node:util"
+
+const WIN = process.platform === "win32"
 
 const SERVER = "bridge"
 const SHIM_FLAG = "--vibe-mcp-stdio"
@@ -17,25 +21,39 @@ const MAX_FRAME = 16 * 1024 * 1024
 const API_ROOT = "https://api.mistral.ai/v1"
 const run = promisify(execFile)
 
+async function firstReadable(paths) {
+  for (const candidate of paths) {
+    try {
+      const resolved = await realpath(candidate)
+      await access(resolved, constants.F_OK)
+      return resolved
+    } catch {}
+  }
+}
+
 async function vibeExecutable() {
+  const names = WIN ? ["vibe-acp.exe", "vibe-acp"] : ["vibe-acp"]
   for (const directory of (process.env.PATH ?? "").split(delimiter)) {
     if (!isAbsolute(directory)) continue
-    try {
-      const executable = await realpath(join(directory, "vibe-acp"))
-      await access(executable, constants.X_OK)
-      return executable
-    } catch {}
+    const found = await firstReadable(names.map((name) => join(directory, name)))
+    if (found) return found
   }
   throw new Error("The official vibe-acp executable was not found in PATH.")
 }
 
 async function vibePython() {
   const executable = await vibeExecutable()
-  const python = join(dirname(executable), "python")
-  try {
-    await access(python, constants.X_OK)
-    return python
-  } catch {}
+  const directory = dirname(executable)
+  const sibling = await firstReadable((WIN ? ["python.exe", "python.cmd", "python"] : ["python"])
+    .map((name) => join(directory, name)))
+  if (sibling) return sibling
+  // shortcut: uv's Windows bin shim is beside uv-tools, not its Scripts/python.exe; revisit for another installer layout
+  if (WIN) {
+    const roots = [process.env.UV_TOOL_DIR, join(dirname(directory), "uv-tools")]
+    const bundled = await firstReadable(roots.filter(Boolean)
+      .map((root) => join(root, "mistral-vibe", "Scripts", "python.exe")))
+    if (bundled) return bundled
+  }
   const launcher = await open(executable)
   try {
     const { buffer, bytesRead } = await launcher.read(Buffer.alloc(512))
@@ -46,6 +64,19 @@ async function vibePython() {
     await launcher.close()
   }
   throw new Error("Could not find the Python runtime of the installed Vibe CLI.")
+}
+
+function runPython(python, args, options) {
+  // A .cmd shim cannot take the "-c" probe program: cmd.exe re-parses the
+  // command line, so its quotes would not survive. Real installs resolve to
+  // python.exe; this branch covers command shims and test stand-ins. Feeding
+  // it an empty stdin ("< nul") makes an accidentally interactive interpreter
+  // exit immediately instead of holding the probe until its bounded timeout.
+  if (WIN && python.toLowerCase().endsWith(".cmd")) {
+    return run(process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe",
+      ["/d", "/s", "/c", python, "<", "nul"], options)
+  }
+  return run(python, args, options)
 }
 
 export async function listVibeModelRows() {
@@ -64,7 +95,7 @@ export async function hasVibeSignIn(signal) {
     return true
   }
 
-  const { stdout } = await run(await vibePython(), ["-I", "-c", `
+  const { stdout } = await runPython(await vibePython(), ["-I", "-c", `
 from vibe.utils.keyring import get_api_key_from_keyring
 
 print("yes" if get_api_key_from_keyring("MISTRAL_API_KEY") else "no")
@@ -92,7 +123,7 @@ async function readVibeApi(...paths) {
 
   // The installed Vibe runtime resolves its own Keychain login. The helper
   // returns API data while keeping the credential inside its process.
-  const { stdout } = await run(await vibePython(), ["-I", "-c", `
+  const { stdout } = await runPython(await vibePython(), ["-I", "-c", `
 import asyncio
 import json
 import sys
@@ -325,10 +356,10 @@ export async function openVibeAcpSession({ model, tools, onTool, onText, onThoug
   const published = prepareTools(tools)
   // Vibe filters on the display name, but identifies approvals by group and tool.
   const allowed = new Set([...published.keys()].map((name) => `mcp_${SERVER}.${name}`))
-  const root = await mkdtemp(join(await realpath("/tmp"), "vibe-acp-"))
+  const root = await mkdtemp(join(WIN ? tmpdir() : await realpath("/tmp"), "vibe-acp-"))
   const home = join(root, "home")
   const cwd = join(root, "work")
-  const socketPath = join(root, "mcp.sock")
+  const socketPath = WIN ? `\\\\.\\pipe\\vibe-acp-${randomBytes(8).toString("hex")}` : join(root, "mcp.sock")
   const sockets = new Set()
   const pending = new Map()
   const calls = new Set()
@@ -351,8 +382,10 @@ export async function openVibeAcpSession({ model, tools, onTool, onText, onThoug
     socket.once("close", () => sockets.delete(socket))
     serveMcp(socket, published, async (name, args) => {
       if (!turn || closedError) return textResult("No active Vibe prompt.", true)
+      progress()
       try {
         const result = await onTool(name, args)
+        progress()
         if (typeof result === "string") return textResult(result)
         if (isObject(result) && Array.isArray(result.content)) return result
         if (isObject(result) && isObject(result.structuredContent) && result.content === undefined) {
@@ -368,7 +401,8 @@ export async function openVibeAcpSession({ model, tools, onTool, onText, onThoug
   function signalGroup(signal) {
     if (!child?.pid) return false
     try {
-      process.kill(-child.pid, signal)
+      if (WIN) spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true })
+      else process.kill(-child.pid, signal)
       return true
     } catch {
       return false
@@ -387,10 +421,14 @@ export async function openVibeAcpSession({ model, tools, onTool, onText, onThoug
     closing = (async () => {
       const serverClosed = new Promise((resolve) => server.close(resolve))
       if (childClosed) {
-        await Promise.race([childClosed, delay(500, undefined, { ref: false })])
         if (signalGroup("SIGTERM")) {
-          await delay(500)
-          signalGroup("SIGKILL")
+          // One taskkill /T /F already ends the whole tree forcibly on Windows;
+          // there is nothing stronger to escalate to. Elsewhere wait briefly,
+          // then escalate to SIGKILL if the child is still alive.
+          if (!WIN) {
+            await Promise.race([childClosed, delay(500, undefined, { ref: false })])
+            signalGroup("SIGKILL")
+          }
         }
         await Promise.race([childClosed, delay(500, undefined, { ref: false })])
       }
@@ -404,11 +442,23 @@ export async function openVibeAcpSession({ model, tools, onTool, onText, onThoug
     void close(error).catch(() => {})
   }
 
+  // Progress while a prompt is in flight re-arms its request timer, so a long
+  // multi-leg tool loop is bounded by idle gaps between events, not by a fixed
+  // wall clock over the whole turn.
+  function progress() {
+    if (turn !== true) return
+    for (const { touch } of pending.values()) touch?.()
+  }
+
   function request(method, params, timeout) {
     if (closedError) return Promise.reject(closedError)
     const id = ++nextId
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => fail(new Error(`Vibe ACP ${method} timed out.`)), timeout)
+      let timer = setTimeout(() => fail(new Error(`Vibe ACP ${method} timed out.`)), timeout)
+      const touch = () => {
+        clearTimeout(timer)
+        timer = setTimeout(() => fail(new Error(`Vibe ACP ${method} timed out.`)), timeout)
+      }
       const finish = (result, error) => {
         clearTimeout(timer)
         pending.delete(id)
@@ -428,6 +478,7 @@ export async function openVibeAcpSession({ model, tools, onTool, onText, onThoug
     if (closedError) return
     if (method === "session/update" && id == null) {
       if (!turn || params?.sessionId !== sessionId) return
+      progress()
       const update = params.update
       if (update?.sessionUpdate === "tool_call" || update?.sessionUpdate === "tool_call_update") {
         const meta = update._meta
@@ -507,7 +558,9 @@ export async function openVibeAcpSession({ model, tools, onTool, onText, onThoug
       if (key !== "VIBE_HOME" && (/^VIBE_/i.test(key) || /^NODE_OPTIONS$/i.test(key) ||
           (/^MISTRAL_/i.test(key) && key !== "MISTRAL_API_KEY"))) delete env[key]
     }
-    child = spawn(await vibeExecutable(), [], { cwd, env, detached: true, stdio: ["pipe", "pipe", "ignore"] })
+    child = spawn(await vibeExecutable(), [], {
+      cwd, env, stdio: ["pipe", "pipe", "ignore"], ...(!WIN && { detached: true }),
+    })
     childClosed = new Promise((resolve) => child.once("close", resolve))
     child.once("error", (error) => fail(new Error(error.code === "ENOENT"
       ? "The official vibe-acp executable was not found in PATH."
