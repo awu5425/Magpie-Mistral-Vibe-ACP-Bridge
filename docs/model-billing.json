@@ -1,0 +1,10 @@
+{
+  "observed_at": "2026-11-20T08:32:00+08:00",
+  "model": "mistral-vibe-acp/mistral-large-4-0",
+  "api_before_eur": 7.414848197,
+  "api_after_eur": 7.414848197,
+  "vibe_before_eur": 0.01148928,
+  "vibe_after_eur": 0.016599616,
+  "api_delta_eur": 0,
+  "vibe_delta_eur": 0.005110336
+}

@@ -2,6 +2,11 @@
 
 <img src="assets/icon.svg" width="72" height="72" alt="Mistral Vibe ACP Bridge">
 
+本仓库是 [gwx90/Magpie-Mistral-Vibe-ACP-Bridge](https://github.com/gwx90/Magpie-Mistral-Vibe-ACP-Bridge)
+的 Windows 适配与修复分支：在原仓库基础上增加了 Windows 平台支持（`vibe-acp.exe` 与 uv 环境
+查找、命名管道、`taskkill` 进程树清理、`.cmd` 探针防护），并修复了长工具回合下的 409 中断
+（按进展续期的空闲超时；桥接状态丢失后自动以完整对话记录续建新回合）。
+
 让 Magpie 中的 OpenCode 等客户端通过本机官方 `vibe-acp` 调用 Mistral 托管的聊天模型。选中
 **Mistral Vibe ACP** 下的模型后，Magpie 会把请求交给 Vibe，再把流式回复传回客户端。客户端工具由
 调用方执行，工具结果通过 MCP 回到同一个 Vibe 回合。
@@ -11,17 +16,17 @@
 
 ## 致谢
 
-本项目源自 [songlairui/magpie-mistral-code](https://github.com/songlairui/magpie-mistral-code)。
-感谢 [songlairui](https://github.com/songlairui) 和上游贡献者提供的 Magpie 与 OpenCode 接入代码，
-本桥接仍沿用了其中的模型目录和额度解析逻辑。Vibe ACP Bridge 由本仓库独立维护。
-
-感谢 OpenAI Codex 协助实现 ACP 桥接、验证模型与工具调用，并更新项目文档。
+本仓库源自 [gwx90/Magpie-Mistral-Vibe-ACP-Bridge](https://github.com/gwx90/Magpie-Mistral-Vibe-ACP-Bridge)，
+该仓库又在 [songlairui/magpie-mistral-code](https://github.com/songlairui/magpie-mistral-code) 的
+OpenCode/Magpie 供应商代码之上实现了 Vibe ACP 桥接。感谢 songlairui、gwx90 及上游贡献者；
+本仓库在两者基础上维护 Windows 适配与长工具回合修复，并遵循 MIT 许可。
 
 ## 前置配置
 
-1. **Magpie** 和 **官方 Mistral Vibe CLI** 安装在同一台机器、同一系统用户下。ACP 桥接使用
-   Unix socket 和 POSIX 子进程。已在 macOS 上验证 Magpie `0.1.4526`、Vibe `3.1.3` 和 OpenCode
-   `v2.3.1`。其他系统和版本尚未验证。[Magpie 安装](https://usemagpie.ai/docs/start) ·
+1. **Magpie** 和 **官方 Mistral Vibe CLI** 安装在同一台机器、同一系统用户下。上游提交在 macOS
+   上使用 Unix socket 和 POSIX 进程组；本机检出额外支持 Windows 的 `vibe-acp.exe`、uv 工具环境、
+   命名管道和进程树清理。已在 macOS 上验证 Magpie `0.1.4526`、Vibe `3.1.3` 和 OpenCode `v2.3.1`，
+   并在 Windows 上验证 Magpie `0.1.4572` 与 Vibe `3.1.3`。[Magpie 安装](https://usemagpie.ai/docs/start) ·
    [官方 Vibe CLI 安装](https://docs.mistral.ai/vibe/code/cli/install-setup)
 2. **先登录官方 Vibe**。运行 `vibe --setup`，完成浏览器登录，并在 Vibe 里用官方 Mistral 模型发条
    短消息。桥接复用该用户钥匙串里的 Vibe 登录。已配置环境变量的用户也可以让启动 Magpie 的进程
@@ -37,10 +42,12 @@
    vibe-acp --version
    ```
 
+   Windows PowerShell 下用 `Get-Command vibe-acp`，或 cmd 下 `where.exe vibe-acp`。
+
 ## 安装与选模型
 
 ```sh
-magpie plugin add github:gwx90/Magpie-Mistral-Vibe-ACP-Bridge
+magpie plugin add github:awu5425/Magpie-Mistral-Vibe-ACP-Bridge
 magpie plugin login mistral-vibe-acp api
 ```
 
@@ -87,8 +94,10 @@ magpie usage --csv --last 24h > magpie-usage.csv
 ### 当前支持范围
 
 ACP 入口支持文本、流式输出和模型目录标明支持的函数工具。每个新聊天回合会创建隔离的 Vibe
-会话，并传入调用方提供的文本历史。等待工具结果的状态保存在内存中。插件重启、请求取消或回合
-超时后，需要重新发起该回合。图片输入、结构化输出和强制工具选择尚未接入。
+会话，并传入调用方提供的文本历史。等待工具结果的状态保存在内存中；只要有进展（新腿、工具调用、
+工具结果或流式文本），桥接层与底层 ACP 会话的空闲计时都会续期。若状态仍然丢失（空闲超时、插件
+重载、宿主重启），下一个工具结果会以整段对话记录播种一个全新的 Vibe 回合继续，而不是以 409
+失败；只有调用方主动取消的请求才需要重新发起。图片输入、结构化输出和强制工具选择尚未接入。
 
 ## 开发测试
 

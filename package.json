@@ -8,7 +8,7 @@
   "files": ["index.mjs", "opencode.mjs", "opencode2.mjs", "vibe-acp-bridge.mjs", "vibe-acp-session.mjs", "assets/icon.svg", "README.md"],
   "keywords": ["opencode", "opencode-plugin", "magpie", "mistral", "vibe", "vibe-code"],
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/gwx90/Magpie-Mistral-Vibe-ACP-Bridge.git" },
+  "repository": { "type": "git", "url": "git+https://github.com/awu5425/Magpie-Mistral-Vibe-ACP-Bridge.git" },
   "magpie": {
     "name": "Magpie Mistral Vibe ACP Bridge",
     "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNTYiIGhlaWdodD0iMjU2IiB2aWV3Qm94PSIwIDAgMjU2IDI1NiIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsPSJNaXN0cmFsIFZpYmUgQUNQIEJyaWRnZSI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImJyaWRnZS1ncmFkaWVudCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiIHgxPSIyOCIgeTE9IjAiIHgyPSIyMjgiIHkyPSIwIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjNjU0N0U4Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzE4ODlEOCIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICA8L2RlZnM+CiAgPGcgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ1cmwoI2JyaWRnZS1ncmFkaWVudCkiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+CiAgICA8cGF0aCBkPSJNMjggOTBoMjAwTTQzIDE3OGMxMi00MiA0My03MSA4NS03MXM3MyAyOSA4NSA3MSIgc3Ryb2tlLXdpZHRoPSIyMCIvPgogICAgPHBhdGggZD0iTTU5IDkwdjUzbTEzOC01M3Y1MyIgc3Ryb2tlLXdpZHRoPSIxNCIvPgogIDwvZz4KPC9zdmc+Cg==",

@@ -1,0 +1,17 @@
+{
+  "observed_at": "2026-11-20T08:01:08.1230786+08:00",
+  "api_budget": {
+    "usage_percentage": 29.077836066666666,
+    "initial_budget": 25.5,
+    "currency": "EUR",
+    "reset_at": "2026-12-01T00:00:00Z",
+    "payg_enabled": false
+  },
+  "vibe_budget": {
+    "usage_percentage": 0.0,
+    "initial_budget": 255.0,
+    "currency": "EUR",
+    "reset_at": "2026-12-01T00:00:00Z",
+    "payg_enabled": false
+  }
+}
