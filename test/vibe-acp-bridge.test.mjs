@@ -49,8 +49,16 @@ test("ACP sign-in connects without key entry when local Vibe credentials exist",
   const originalPath = process.env.PATH
   const originalToken = process.env.MISTRAL_API_KEY
   try {
-    await writeFile(join(bin, "vibe-acp"), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
-    await writeFile(join(bin, "python"), "#!/bin/sh\nprintf 'no\\n'\n", { mode: 0o700 })
+    if (process.platform === "win32") {
+      await writeFile(join(bin, "vibe-acp"), "")
+      // set /p waits on stdin: with the bridge's "< nul" redirect this hits EOF
+      // and falls through to `echo no`; without it the probe would block until
+      // its bounded timeout and the sign-in error message would differ.
+      await writeFile(join(bin, "python.cmd"), "@echo off\r\nset /p probe=\r\necho no\r\n")
+    } else {
+      await writeFile(join(bin, "vibe-acp"), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
+      await writeFile(join(bin, "python"), "#!/bin/sh\nprintf 'no\\n'\n", { mode: 0o700 })
+    }
     process.env.PATH = bin
     delete process.env.MISTRAL_API_KEY
 
@@ -171,6 +179,24 @@ test("ACP catalog keeps verified presets when discovery is unavailable", async (
   expect(Object.keys(await catalog.list())).toEqual([model, ...otherModels])
 })
 
+test("invalid tool schemas are rejected as request errors before a session opens", async () => {
+  const opened = []
+  const bridge = createVibeAcpFetch(async () => {
+    opened.push("session")
+    throw new Error("should not open")
+  })
+  const badTools = [
+    [{ type: "function", function: { name: "bad", parameters: "text" } }],
+    [{ type: "function", function: { name: "bad", parameters: ["array"] } }],
+    [{ type: "function", function: { name: "bad", parameters: 42 } }],
+  ]
+  for (const tools of badTools) {
+    const response = await send(bridge, { tools })
+    expect(response.status).toBe(400)
+  }
+  expect(opened).toEqual([])
+})
+
 test("non-streaming replies include reported tokens and omit missing usage", async () => {
   const makeBridge = (usage) => createVibeAcpFetch(async ({ onText }) => ({
     async prompt() {
@@ -235,7 +261,6 @@ test("tool finish pauses the HTTP response while the original ACP turn stays act
     return JSON.stringify({ model, messages: continued, stream: true })
   }
   expect((await bridge(interrupted)).status).toBe(499)
-  expect((await send(bridge, { model: otherModels[0], messages: continued, tools })).status).toBe(409)
 
   const second = await send(bridge, { messages: continued, tools })
   const secondEvents = events(await second.text())
@@ -253,7 +278,136 @@ test("tool finish pauses the HTTP response while the original ACP turn stays act
   expect(reply.map((c) => c.delta.content).filter(Boolean)).toEqual(["Found ", "unique-result"])
   expect(reply.at(-1).finish_reason).toBe("stop")
   expect([opened, prompts, closed]).toEqual([1, 1, 1])
-  expect((await send(bridge, { messages: continued, tools })).status).toBe(409)
+})
+
+test("a prefixed model id and a rewritten tool id still continue the same turn", async () => {
+  const bridge = createVibeAcpFetch(async ({ onTool, onText }) => ({
+    async prompt() {
+      onText(await onTool("marker", {}))
+      return { stopReason: "end_turn" }
+    },
+    close() {},
+  }))
+  const tools = [{ type: "function", function: { name: "marker", parameters: { type: "object" } } }]
+  const first = await send(bridge, { tools })
+  const chunks = events(await first.text()).map((chunk) => chunk.choices[0])
+  const continued = [...messages, { role: "assistant", tool_calls: [chunks.find((chunk) => chunk.delta.tool_calls).delta.tool_calls[0]] }, {
+    role: "tool", tool_call_id: "rewritten-by-client", content: "still-the-same-turn",
+  }]
+  const second = await send(bridge, { model: "mistral-vibe-acp/mistral-large-4-0", messages: continued, tools })
+  expect(second.status).toBe(200)
+  expect(await second.text()).toContain("still-the-same-turn")
+})
+
+test("an unmatched tool result seeds a fresh turn from the transcript", async () => {
+  const seen = []
+  const bridge = createVibeAcpFetch(async ({ model, onText, onTool }) => {
+    seen.push(model.id)
+    if (seen.length === 1) {
+      return {
+        async prompt() {
+          onText("Looking.")
+          await onTool("marker", {})
+          onText("First done.")
+          return { stopReason: "end_turn" }
+        },
+        close() {},
+      }
+    }
+    return {
+      async prompt(text) {
+        expect(text).toContain("late-tool-result")
+        onText("Recovered.")
+        return { stopReason: "end_turn" }
+      },
+      close() {},
+    }
+  })
+  const tools = [{ type: "function", function: { name: "marker", parameters: { type: "object" } } }]
+  const first = await send(bridge, { tools })
+  const call = events(await first.text()).map((chunk) => chunk.choices[0])
+    .find((chunk) => chunk.delta.tool_calls).delta.tool_calls[0]
+  const continued = [...messages, { role: "assistant", tool_calls: [call] }, {
+    role: "tool", tool_call_id: call.id, content: "tool-output",
+  }]
+  expect(await (await send(bridge, { messages: continued, tools })).text()).toContain("First done.")
+  expect(seen).toEqual([model])
+
+  const stale = await send(bridge, { messages: [...messages, { role: "assistant", tool_calls: [call] }, {
+    role: "tool", tool_call_id: call.id, content: "late-tool-result",
+  }] })
+  expect(stale.status).toBe(200)
+  expect(await stale.text()).toContain("Recovered.")
+  expect(seen).toEqual([model, model])
+
+  const other = await send(bridge, { model: otherModels[0], messages: [...messages, { role: "assistant", tool_calls: [call] }, {
+    role: "tool", tool_call_id: "ghost-id", content: "late-tool-result",
+  }] })
+  expect(other.status).toBe(200)
+  expect(await other.text()).toContain("Recovered.")
+  expect(seen).toEqual([model, model, otherModels[0]])
+})
+
+test("continuous tool traffic keeps a short-budget turn alive end to end", async () => {
+  let opened = 0
+  const bridge = createVibeAcpFetch(async ({ onText, onTool }) => {
+    opened++
+    return {
+      async prompt() {
+        for (let leg = 1; leg <= 4; leg++) {
+          onText(`step ${leg} `)
+          await onTool("marker", {})
+          await new Promise((resolve) => setTimeout(resolve, 25))
+        }
+        onText("all done")
+        return { stopReason: "end_turn" }
+      },
+      close() {},
+    }
+  }, undefined, { turnTimeout: 60 })
+  const tools = [{ type: "function", function: { name: "marker", parameters: { type: "object" } } }]
+  let history = messages
+  for (let step = 0; step < 10; step++) {
+    const response = await send(bridge, { messages: history, tools })
+    const chunks = events(await response.text()).map((chunk) => chunk.choices[0])
+    const call = chunks.find((chunk) => chunk.delta.tool_calls)?.delta.tool_calls[0]
+    if (!call) {
+      expect(chunks.map((chunk) => chunk.delta.content ?? "").join("")).toContain("all done")
+      expect(chunks.at(-1).finish_reason).toBe("stop")
+      break
+    }
+    history = [...history, { role: "assistant", tool_calls: [call] }, {
+      role: "tool", tool_call_id: call.id, content: `leg-${step}`,
+    }]
+  }
+  expect(opened).toBe(1)
+})
+
+test("a reaped turn's late tool result seeds a fresh turn instead of failing", async () => {
+  let opened = 0
+  const bridge = createVibeAcpFetch(async ({ onText, onTool }) => {
+    opened++
+    return {
+      async prompt() {
+        onText("Looking.")
+        await onTool("marker", {})
+        onText("unreachable")
+        return { stopReason: "end_turn" }
+      },
+      close() {},
+    }
+  }, undefined, { turnTimeout: 60 })
+  const tools = [{ type: "function", function: { name: "marker", parameters: { type: "object" } } }]
+  const first = await send(bridge, { tools })
+  const call = events(await first.text()).map((chunk) => chunk.choices[0])
+    .find((chunk) => chunk.delta.tool_calls).delta.tool_calls[0]
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  const late = await send(bridge, { messages: [...messages, { role: "assistant", tool_calls: [call] }, {
+    role: "tool", tool_call_id: call.id, content: "late-result",
+  }] })
+  expect(late.status).toBe(200)
+  expect(await late.text()).toContain("Looking.")
+  expect(opened).toBe(2)
 })
 
 test("aborting a response closes the in-flight ACP session", async () => {
